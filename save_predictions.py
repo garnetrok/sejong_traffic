@@ -5,7 +5,7 @@ import pandas as pd
 from sklearn.ensemble import RandomForestRegressor
 from fetch_data import fetch_table_all
 from prepare_features import build_monthly_features
-from train_model import prepare_model_input
+from train_model import prepare_model_input, evaluate_model
 from predict_next_quarter import get_next_quarter_months, build_future_rows
 
 load_dotenv()
@@ -18,6 +18,14 @@ def run_and_save():
     acc_df = fetch_table_all("mock_accident_data")
     features_df = build_monthly_features(acc_df)
 
+    # 1) 평가 먼저 수행 (학습에 안 쓴 데이터로 성능 측정)
+    eval_metrics = evaluate_model(features_df)
+    eval_metrics["model_version"] = "rf_v1"
+
+    supabase.table("ml_model_eval").insert(eval_metrics).execute()
+    print(f"평가지표 저장 완료: MAE={eval_metrics['mae']}, R2={eval_metrics['r2_score']}")
+
+    # 2) 실전 예측용 모델은 전체 데이터로 재학습 (다음 분기 예측이 목적이므로)
     X_all, y_all, feature_cols = prepare_model_input(features_df)
     model = RandomForestRegressor(n_estimators=200, max_depth=6, random_state=42)
     model.fit(X_all, y_all)
@@ -47,13 +55,11 @@ def run_and_save():
     quarter_summary["target_period"] = period_label
 
     records = quarter_summary.to_dict(orient="records")
+    supabase.table("ml_safety_scores").upsert(records, on_conflict="legal_dong_name").execute()
 
-    response = supabase.table("ml_safety_scores").upsert(
-        records, on_conflict="legal_dong_name"
-    ).execute()
+    print(f"예측 저장 완료: {len(records)}개 동, 대상 기간 {period_label}")
 
-    print(f"저장 완료: {len(records)}개 동, 대상 기간 {period_label}")
-    return response
+    return {"predictions": records, "eval": eval_metrics}
 
 
 if __name__ == "__main__":
