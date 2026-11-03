@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>세종시 실시간 교통 관제</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
+<style>
+  :root { --bg:#0b1220; --panel:#131c2e; --line:#24324a; --text:#e5e7eb; --muted:#94a3b8;
+          --primary:#38bdf8; --green:#22c55e; --yellow:#eab308; --red:#ef4444; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family:'Pretendard','Malgun Gothic',sans-serif; }
+  header { display:flex; justify-content:space-between; align-items:center; padding:12px 20px; border-bottom:1px solid var(--line); gap:12px; flex-wrap:wrap; }
+  h1 { margin:0; font-size:19px; }
+  .sub { font-size:11px; color:var(--primary); letter-spacing:1px; font-weight:bold; }
+  .head-right { display:flex; align-items:center; gap:12px; font-size:13px; color:var(--muted); }
+  button { background:var(--primary); color:#0b1220; border:0; border-radius:6px; padding:7px 14px; font-weight:bold; cursor:pointer; }
+  button:disabled { background:#334155; color:var(--muted); cursor:not-allowed; }
+  .cards { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; padding:14px 20px 0; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px; }
+  .card .label { font-size:12px; color:var(--muted); }
+  .card .value { font-size:24px; font-weight:800; margin-top:4px; }
+  .card .note { font-size:11px; color:var(--muted); margin-top:2px; }
+  main { display:grid; grid-template-columns:1fr 360px; gap:12px; padding:14px 20px; height:calc(100vh - 200px); min-height:480px; }
+  #map { border-radius:10px; border:1px solid var(--line); }
+  .map-tiles-dark { filter: invert(100%) hue-rotate(180deg) brightness(95%) contrast(90%); }
+  aside { display:flex; flex-direction:column; gap:12px; min-height:0; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px; }
+  .panel h2 { margin:0 0 8px; font-size:14px; }
+  #feed { flex:1; overflow-y:auto; min-height:0; }
+  .ev { padding:8px; border-radius:6px; border:1px solid var(--line); margin-bottom:6px; cursor:pointer; font-size:13px; }
+  .ev:hover { border-color:var(--primary); }
+  .ev .t { font-weight:bold; }
+  .ev .m { color:var(--muted); font-size:12px; margin-top:2px; }
+  .badge { display:inline-block; padding:1px 6px; border-radius:4px; font-size:11px; margin-right:4px; background:#1e293b; }
+  .badge.acc { background:var(--red); color:#fff; } .badge.cor { background:var(--yellow); color:#111; }
+  .ended { opacity:.5; }
+  #cctv-box { font-size:13px; }
+  #cctv-box .muted { color:var(--muted); font-size:12px; }
+  #cctv-box video { width:100%; border-radius:6px; background:#000; margin-top:6px; }
+  .legend { background:rgba(19,28,46,.9); padding:8px 10px; border-radius:6px; font-size:12px; color:var(--text); line-height:1.6; }
+  .legend i { display:inline-block; width:18px; height:4px; margin-right:6px; vertical-align:middle; }
+  footer { padding:0 20px 14px; font-size:11px; color:var(--muted); }
+  #msg { font-size:12px; color:var(--yellow); }
+  @media (max-width: 900px) { .cards { grid-template-columns:repeat(2,1fr); } main { grid-template-columns:1fr; height:auto; } #map { height:60vh; } }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <div class="sub">SEJONG · REAL-TIME TRAFFIC</div>
+    <h1>세종시 실시간 교통 관제</h1>
+  </div>
+  <div class="head-right">
+    <span id="usage" title="ITS 서비스별 월 호출 한도 100건">이번 달 사용량 -</span>
+    <span id="msg"></span>
+    <button id="refresh-btn" onclick="refreshNow()">지금 갱신</button>
+  </div>
+</header>
+
+<section class="cards">
+  <div class="card"><div class="label">돌발 상황</div><div class="value" id="c-events">-</div><div class="note" id="c-events-note"></div></div>
+  <div class="card"><div class="label">주요 도로 평균 속도</div><div class="value" id="c-speed">-</div><div class="note">국도·시도 구간 평균</div></div>
+  <div class="card"><div class="label">정체 구간</div><div class="value" id="c-jam">-</div><div class="note">시속 15km 미만 (고속도로 40km)</div></div>
+  <div class="card"><div class="label">마지막 갱신</div><div class="value" id="c-updated" style="font-size:18px">-</div><div class="note">자동 갱신 하루 1번</div></div>
+</section>
+
+<main>
+  <div id="map"></div>
+  <aside>
+    <div class="panel" style="display:flex;flex-direction:column;flex:1;min-height:0">
+      <h2>돌발 이벤트 피드</h2>
+      <div id="feed"><div class="muted">불러오는 중…</div></div>
+    </div>
+    <div class="panel" id="cctv-box">
+      <h2>CCTV</h2>
+      <div class="muted">지도에서 CCTV나 돌발을 누르면 가장 가까운 CCTV를 보여 줍니다.</div>
+    </div>
+  </aside>
+</main>
+
+<footer>
+  데이터 출처: 국가교통정보센터(ITS) 교통소통·돌발상황·CCTV 정보, 표준노드링크(2026-10-14) · 지도 © OpenStreetMap contributors
+  · <a href="/legacy" style="color:var(--muted)">옛 사고 데이터 대시보드</a>
+</footer>
+
+<script>
+const SERVICE_NAMES = { trafficInfo: '소통', eventInfo: '돌발', cctvInfo: 'CCTV' };
+const map = L.map('map', { preferCanvas: true }).setView([36.56, 127.27], 11);
+L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+  { attribution: '&copy; OpenStreetMap contributors', className: 'map-tiles-dark', maxZoom: 18 }).addTo(map);
+const trafficLayer = L.layerGroup().addTo(map);
+const eventLayer = L.layerGroup().addTo(map);
+const cctvLayer = L.layerGroup().addTo(map);
+L.control.layers(null, { '소통 (구간 속도)': trafficLayer, '돌발 (사고·공사·통제)': eventLayer, 'CCTV': cctvLayer },
+  { collapsed: false }).addTo(map);
+
+const legend = L.control({ position: 'bottomleft' });
+legend.onAdd = () => Object.assign(L.DomUtil.create('div', 'legend'), { innerHTML:
+  '<i style="background:#22c55e"></i>원활<br><i style="background:#eab308"></i>서행<br><i style="background:#ef4444"></i>정체<br><i style="background:#64748b"></i>정보 없음' });
+legend.addTo(map);
+
+let links = null, status = null;
+
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const isHighway = rank => rank === '101' || rank === '102';
+// ITS 소통 색 기준: 고속도로 70/40, 그 외 30/15 km/h
+function speedColor(speed, rank) {
+  if (speed == null) return '#64748b';
+  const [ok, slow] = isHighway(rank) ? [70, 40] : [30, 15];
+  return speed >= ok ? '#22c55e' : speed >= slow ? '#eab308' : '#ef4444';
+}
+// "20261103134500" 또는 ISO 시각 → "11/03 13:45"
+function fmtTime(v) {
+  if (!v) return '-';
+  if (/^\d{14}$/.test(v)) return `${v.slice(4, 6)}/${v.slice(6, 8)} ${v.slice(8, 10)}:${v.slice(10, 12)}`;
+  const d = new Date(v);
+  return `${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+function distKm(a, b) {  // 하버사인 거리
+  const R = 6371, rad = x => x * Math.PI / 180;
+  const dLat = rad(b.lat - a.lat), dLon = rad(b.lon - a.lon);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+async function api(name, ...args) {
+  const r = await fetch('/api/' + name, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ args }) });
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(body.error || 'HTTP ' + r.status);
+  return body.result;
+}
+
+function render() {
+  const s = status;
+  // 사용량 + 갱신 버튼
+  document.getElementById('usage').textContent = '이번 달 사용량 ' +
+    Object.keys(SERVICE_NAMES).map(k => `${SERVICE_NAMES[k]} ${s.usage[k] || 0}/${s.limit}`).join(' · ');
+  const reasons = [...new Set(Object.values(s.refresh_blocked).filter(Boolean))];
+  const allBlocked = Object.values(s.refresh_blocked).every(Boolean);
+  const btn = document.getElementById('refresh-btn');
+  btn.disabled = allBlocked;
+  btn.title = reasons.join('\n');
+  document.getElementById('msg').textContent = allBlocked ? reasons[0] : '';
+
+  // 소통 선
+  trafficLayer.clearLayers();
+  let sum = 0, n = 0, jam = 0;
+  L.geoJSON(links, {
+    style: f => ({ color: speedColor(s.speeds[f.properties.id], f.properties.rank), weight: isHighway(f.properties.rank) ? 4 : 3, opacity: .9 }),
+    onEachFeature: (f, layer) => {
+      const p = f.properties, sp = s.speeds[p.id];
+      if (sp != null) {
+        if (!isHighway(p.rank)) { sum += sp; n++; }
+        if (sp < (isHighway(p.rank) ? 40 : 15)) jam++;
+      }
+      layer.bindTooltip(`${esc(p.name)} · ${sp != null ? sp.toFixed(0) + ' km/h' : '정보 없음'} (제한 ${p.max_spd})`);
+    }
+  }).addTo(trafficLayer);
+
+  // 돌발 마커
+  eventLayer.clearLayers();
+  s.events.forEach(e => {
+    if (e.lat == null) return;
+    L.circleMarker([e.lat, e.lon], { radius: 9, color: '#fff', weight: 2, fillColor: e.event_type === '교통사고' ? '#ef4444' : '#eab308', fillOpacity: 1 })
+      .bindPopup(`<b>${esc(e.event_type)} · ${esc(e.event_detail_type)}</b><br>${esc(e.road_name)} ${esc(e.road_drc_type)}<br>${esc(e.message)}<br>발생 ${fmtTime(e.start_date)}`)
+      .on('click', () => showNearestCctv(e))
+      .addTo(eventLayer);
+  });
+
+  // CCTV 마커
+  cctvLayer.clearLayers();
+  s.cctv.forEach(c => L.circleMarker([c.lat, c.lon], { radius: 5, color: '#38bdf8', weight: 1, fillColor: '#0ea5e9', fillOpacity: .8 })
+    .bindTooltip(esc(c.name)).on('click', () => showCctv(c)).addTo(cctvLayer));
+
+  // 상단 카드
+  document.getElementById('c-events').textContent = s.events.length + '건';
+  const acc = s.events.filter(e => e.event_type === '교통사고').length;
+  document.getElementById('c-events-note').textContent = `사고 ${acc} · 공사 ${s.events.filter(e => e.event_type === '공사').length} · 기타 ${s.events.length - acc - s.events.filter(e => e.event_type === '공사').length}`;
+  document.getElementById('c-speed').textContent = n ? (sum / n).toFixed(1) + ' km/h' : '-';
+  document.getElementById('c-jam').textContent = jam + '개';
+  document.getElementById('c-updated').textContent = fmtTime(s.updated_at);
+
+  // 이벤트 피드 (최근 20건, 지금 없는 건 흐리게)
+  const activeKeys = new Set(s.events.map(e => e.event_key));
+  document.getElementById('feed').innerHTML = s.feed.length ? s.feed.map(e => `
+    <div class="ev ${activeKeys.has(e.event_key) ? '' : 'ended'}" data-key="${esc(e.event_key)}">
+      <div class="t"><span class="badge ${e.event_type === '교통사고' ? 'acc' : e.event_type === '공사' ? 'cor' : ''}">${esc(e.event_type)}</span>${esc(e.road_name)} ${esc(e.road_drc_type)}</div>
+      <div class="m">${esc(e.message)}</div>
+      <div class="m">${esc(e.road_type)} · 발생 ${fmtTime(e.start_date)}${activeKeys.has(e.event_key) ? '' : ' · 종료됨'}</div>
+    </div>`).join('') : '<div class="muted">돌발 정보가 없습니다.</div>';
+  document.querySelectorAll('#feed .ev').forEach(el => el.onclick = () => {
+    const e = s.feed.find(x => x.event_key === el.dataset.key);
+    if (e && e.lat != null) { map.flyTo([e.lat, e.lon], 15); showNearestCctv(e); }
+  });
+}
+
+function showNearestCctv(e) {
+  if (!status.cctv.length || e.lat == null) return;
+  const best = status.cctv.reduce((a, c) => distKm(e, c) < distKm(e, a) ? c : a);
+  showCctv(best, distKm(e, best));
+}
+
+let hls = null;
+async function showCctv(c, km) {
+  if (hls) { hls.destroy(); hls = null; }
+  const box = document.getElementById('cctv-box');
+  box.innerHTML = `<h2>CCTV</h2>
+    <div><b>${esc(c.name)}</b> <span class="badge">${c.road_type === 'ex' ? '고속도로' : '국도'}</span></div>
+    ${km != null ? `<div class="muted">돌발 지점에서 ${km.toFixed(1)}km</div>` : ''}
+    <video id="cctv-video" muted autoplay playsinline controls></video>
+    <div class="muted" id="cctv-note">영상 불러오는 중…</div>`;
+  const video = document.getElementById('cctv-video'), note = document.getElementById('cctv-note');
+  const fail = () => { note.textContent = '재생 실패 — 영상 주소가 만료됐을 수 있습니다. "지금 갱신"으로 새 주소를 받으세요.'; };
+  try {
+    const { url, url_fetched_at } = await api('getCctvUrl', c.cctv_key);
+    if (!url) return fail();
+    const ok = () => { note.textContent = `영상 주소 받은 시각 ${fmtTime(url_fetched_at)} · 출처 국가교통정보센터`; };
+    if (window.Hls && Hls.isSupported()) {
+      hls = new Hls();
+      hls.on(Hls.Events.MANIFEST_PARSED, ok);
+      hls.on(Hls.Events.ERROR, (_, d) => { if (d.fatal) fail(); });
+      hls.loadSource(url); hls.attachMedia(video);
+    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {  // 사파리는 HLS 기본 지원
+      video.src = url; video.onloadedmetadata = ok; video.onerror = fail;
+    } else fail();
+  } catch (err) { fail(); }
+}
+
+async function load() {
+  try {
+    [links, status] = await Promise.all([fetch('/static/sejong_links.geojson').then(r => r.json()), api('getLiveStatus')]);
+    render();
+  } catch (err) {
+    document.getElementById('feed').innerHTML = `<div class="muted">불러오기 실패: ${esc(err.message)}</div>`;
+  }
+}
+
+async function refreshNow() {
+  const btn = document.getElementById('refresh-btn');
+  btn.disabled = true; btn.textContent = '갱신 중…';
+  try {
+    const r = await api('refreshLive');
+    status = r.status;
+    const errs = Object.entries(r.result).filter(([, v]) => v.error).map(([k, v]) => `${SERVICE_NAMES[k]}: ${v.error}`);
+    render();
+    if (errs.length) alert('일부 갱신 실패\n' + errs.join('\n'));
+  } catch (err) {
+    alert('갱신 실패: ' + err.message);
+    btn.disabled = false;
+  } finally {
+    btn.textContent = '지금 갱신';
+  }
+}
+
+load();
+</script>
+</body>
+</html>

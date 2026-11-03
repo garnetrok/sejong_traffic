@@ -63,8 +63,9 @@
 
         try {
             leafletMap = L.map('sejong-accident-map').setView([36.515, 127.270], 12);
-            L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-                attribution: '&copy; OpenStreetMap contributors &copy; CARTO'
+            L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                attribution: '&copy; OpenStreetMap contributors',
+                className: 'map-tiles-dark'
             }).addTo(leafletMap);
             setTimeout(() => { if (leafletMap) leafletMap.invalidateSize(); }, 500);
         } catch (e) {

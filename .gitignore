@@ -1,0 +1,22 @@
+# 비밀 값 — 절대 커밋하지 않기
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# OS / 에디터
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# ITS 응답 캐시·사용량 (로컬 개발용)
+.its_cache/
+
+# 표준노드링크 원본 (용량 큼)
+data/

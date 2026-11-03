@@ -111,6 +111,61 @@ def getAiPredictReport(last_year_cnt, this_year_cnt, rate_calc) -> str:
         return f"AI 분석 연동 예외 발생: {e}"
 
 
+def _select_all(query_fn) -> list:
+    """Supabase는 한 번에 1000행까지만 주므로 나눠서 모두 읽음."""
+    rows, start = [], 0
+    while True:
+        page = query_fn().range(start, start + 999).execute().data
+        rows.extend(page)
+        if len(page) < 1000:
+            return rows
+        start += 1000
+
+
+def getLiveStatus() -> dict:
+    """실시간 관제 화면용: Supabase에 저장된 최신 ITS 데이터만 읽음 (ITS 호출 안 함)."""
+    from its_client import MONTHLY_LIMIT, now_kst, usage_rows
+    from its_collector import manual_refresh_check
+
+    latest = supabase.table("its_traffic").select("collected_at").order("collected_at", desc=True).limit(1).execute().data
+    updated_at = latest[0]["collected_at"] if latest else None
+    speeds = {}
+    if updated_at:
+        rows = _select_all(lambda: supabase.table("its_traffic").select("link_id,speed").eq("collected_at", updated_at))
+        speeds = {r["link_id"]: r["speed"] for r in rows}
+
+    last_ev = supabase.table("its_events").select("last_seen_at").order("last_seen_at", desc=True).limit(1).execute().data
+    active = (supabase.table("its_events").select("*").eq("last_seen_at", last_ev[0]["last_seen_at"]).execute().data
+              if last_ev else [])
+    feed = supabase.table("its_events").select("*").order("first_seen_at", desc=True).limit(20).execute().data
+    cctv = supabase.table("its_cctv").select("cctv_key,road_type,name,lat,lon").execute().data
+
+    usage = usage_rows()
+    return {
+        "updated_at": updated_at,
+        "speeds": speeds,
+        "events": active,
+        "feed": feed,
+        "cctv": cctv,
+        "usage": {r["service"]: r["call_count"] for r in usage},
+        "limit": MONTHLY_LIMIT,
+        "refresh_blocked": manual_refresh_check(usage, now_kst().date()),
+    }
+
+
+def getCctvUrl(cctv_key: str) -> dict:
+    """CCTV 영상 주소 (저장된 것 재사용, ITS 호출 안 함).
+    주의: 스트림 응답 안에 ITS 키가 들어 있어 브라우저에서 보임 — 사용자 결정(2026-11-03)으로 직접 재생."""
+    rows = supabase.table("its_cctv").select("url,url_fetched_at").eq("cctv_key", cctv_key).execute().data
+    return rows[0] if rows else {}
+
+
+def refreshLive() -> dict:
+    """"지금 갱신" 버튼: 10분 간격·월 예비분 규칙을 지키는 서비스만 ITS 호출."""
+    from its_collector import collect
+    return {"result": collect(manual=True), "status": getLiveStatus()}
+
+
 # 화면에서 호출할 수 있는 함수 목록 (여기 없는 이름은 거부)
 API_FUNCTIONS = {
     f.__name__: f
@@ -121,5 +176,8 @@ API_FUNCTIONS = {
         fetchMlSafetyScores,
         triggerMlRecompute,
         getAiPredictReport,
+        getLiveStatus,
+        getCctvUrl,
+        refreshLive,
     )
 }

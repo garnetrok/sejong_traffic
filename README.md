@@ -14,7 +14,11 @@ Flask 서버 하나가 대시보드 화면, 데이터 API, ML 학습을 모두 �
 
 | 경로 | 내용 |
 |---|---|
-| `app.py` | Flask 서버 — 화면(`/`), API(`/api/<함수명>`), `/health`, `/recompute` |
+| `app.py` | Flask 서버 — 실시간 관제(`/`), 옛 대시보드(`/legacy`), API(`/api/<함수명>`), `/collect`, `/health`, `/recompute` |
+| `its_client.py` / `its_collector.py` | ITS 호출(월 사용량 기록·한도 차단) / 수집 → Supabase 저장 |
+| `.github/workflows/collect.yml` | 매일 08:00 자동 수집 |
+| `static/sejong_links.geojson` | 세종 표준노드링크 구간 (`tools/build_sejong_links.py`로 생성) |
+| `supabase/its_tables.sql` | 실시간 관제 테이블 |
 | `dashboard_api.py` | 화면이 부르는 서버 함수 (데이터 조회, 엑셀 업서트, 조치 상태 변경, ML 점수, Gemini) |
 | `web/` | 대시보드 화면 (`index.html`, `script.html`, `style.html`, `server-bridge.js`) |
 | `fetch_data.py` | Supabase에서 1,000행씩 나눠 전체 데이터 조회 |
@@ -23,7 +27,6 @@ Flask 서버 하나가 대시보드 화면, 데이터 API, ML 학습을 모두 �
 | `predict_next_quarter.py` | 다음 분기 3개월 예측 (단독 실행용) |
 | `save_predictions.py` | 평가 → 재학습 → 예측 → `ml_model_eval`, `ml_safety_scores` 저장 |
 | `gunicorn.conf.py` | 서버 응답 제한 시간 180초 (ML 재학습용) |
-| `supabase/schema.sql` | 테이블 참고 스키마 (새 DB를 만들 때만) |
 
 ## 환경 변수
 
@@ -32,6 +35,8 @@ Flask 서버 하나가 대시보드 화면, 데이터 API, ML 학습을 모두 �
 | `SUPABASE_URL` | ✅ | `https://<project-ref>.supabase.co` |
 | `SUPABASE_SERVICE_KEY` | ✅ | Supabase service_role 키 |
 | `DASHBOARD_PASSWORD` | 권장 | 설정하면 접속할 때 비밀번호를 물어봄 (아이디 칸은 아무거나) |
+| `ITS_API_KEY` | ✅ | 국가교통정보센터 OpenAPI (소통·돌발·CCTV, 서비스별 월 100건) |
+| `COLLECT_TOKEN` | ✅ | 일일 자동 수집 `/collect` 보호용. GitHub 저장소 Secrets 에도 같은 이름·값으로 등록 |
 | `GEMINI_API_KEY` | 선택 | Gemini 리포트용 |
 
 키는 코드에 넣지 않습니다. 로컬은 `.env`(깃에 안 올라감), Render는 Environment 메뉴에 넣습니다.

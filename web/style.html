@@ -306,6 +306,9 @@
         }
 
         /* Leaflet 커스텀 스타일 (다크모드) */
+        /* OSM 밝은 타일을 어두운 테마로 반전 (CARTO dark가 API 키를 요구해서 교체) */
+        .map-tiles-dark { filter: invert(100%) hue-rotate(180deg) brightness(95%) contrast(90%); }
+
         .leaflet-popup-content-wrapper {
             border-radius: 8px;
             padding: 5px;

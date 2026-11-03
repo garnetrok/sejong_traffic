@@ -1,3 +1,4 @@
+import hmac
 import os
 from pathlib import Path
 
@@ -14,7 +15,7 @@ WEB_DIR = Path(__file__).parent / "web"
 def require_password():
     """DASHBOARD_PASSWORD 환경 변수를 설정하면 접속 시 비밀번호를 물어봄 (아이디는 아무거나)."""
     password = os.environ.get("DASHBOARD_PASSWORD")
-    if not password or request.path == "/health":
+    if not password or request.path in ("/health", "/collect"):
         return None
     auth = request.authorization
     if auth and auth.password == password:
@@ -27,7 +28,13 @@ def _read(name: str) -> str:
 
 
 @app.route("/")
+def live():
+    return Response(_read("live.html"), mimetype="text/html")
+
+
+@app.route("/legacy")
 def dashboard():
+    """옛 사고 데이터 대시보드 (Apps Script에서 옮긴 화면)."""
     html = _read("index.html")
     html = html.replace("<?!= include('style'); ?>", _read("style.html"))
     html = html.replace(
@@ -52,6 +59,16 @@ def call_api(name):
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({"status": "ok"})
+
+
+@app.route("/collect", methods=["POST"])
+def collect_route():
+    """하루 1번 자동 수집 (GitHub Actions가 호출). COLLECT_TOKEN 이 맞아야 실행 — ITS 월 호출 한도 보호."""
+    token = os.environ.get("COLLECT_TOKEN")
+    if not token or not hmac.compare_digest(request.headers.get("X-Collect-Token", ""), token):
+        return jsonify({"error": "인증 실패"}), 401
+    from its_collector import collect
+    return jsonify(collect())
 
 
 @app.route("/recompute", methods=["POST"])
