@@ -19,6 +19,8 @@ Flask 서버 하나가 대시보드 화면, 데이터 API, ML 학습을 모두 �
 | `.github/workflows/collect.yml` | 매일 08:00 자동 수집 |
 | `static/sejong_links.geojson` | 세종 표준노드링크 구간 (`tools/build_sejong_links.py`로 생성) |
 | `supabase/its_tables.sql` | 실시간 관제 테이블 |
+| `koroad_collector.py` | 도로교통공단 사고다발지역 수집 (매일 자동 수집 때 새 연도 확인) |
+| `supabase/koroad_ai_tables.sql` | 사고다발지역·AI 브리핑 테이블 |
 | `dashboard_api.py` | 화면이 부르는 서버 함수 (데이터 조회, 엑셀 업서트, 조치 상태 변경, ML 점수, Gemini) |
 | `web/` | 대시보드 화면 (`index.html`, `script.html`, `style.html`, `server-bridge.js`) |
 | `fetch_data.py` | Supabase에서 1,000행씩 나눠 전체 데이터 조회 |
@@ -37,7 +39,8 @@ Flask 서버 하나가 대시보드 화면, 데이터 API, ML 학습을 모두 �
 | `DASHBOARD_PASSWORD` | 권장 | 설정하면 접속할 때 비밀번호를 물어봄 (아이디 칸은 아무거나) |
 | `ITS_API_KEY` | ✅ | 국가교통정보센터 OpenAPI (소통·돌발·CCTV, 서비스별 월 100건) |
 | `COLLECT_TOKEN` | ✅ | 일일 자동 수집 `/collect` 보호용. GitHub 저장소 Secrets 에도 같은 이름·값으로 등록 |
-| `GEMINI_API_KEY` | 선택 | Gemini 리포트용 |
+| `DATA_GO_KR_KEY` | ✅ | 공공데이터포털 일반 인증키 (도로교통공단 사고다발지역) |
+| `GEMINI_API_KEY` | ✅ | AI 대응 브리핑 (같은 수집 데이터로는 1회만 생성해 `ai_briefings`에 저장) |
 
 키는 코드에 넣지 않습니다. 로컬은 `.env`(깃에 안 올라감), Render는 Environment 메뉴에 넣습니다.
 

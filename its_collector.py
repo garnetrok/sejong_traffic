@@ -104,6 +104,12 @@ def collect(manual=False, use_cache=False) -> dict:
             result[svc] = {"count": fn(use_cache)}
         except Exception as e:  # 한 서비스가 실패해도 나머지는 수집
             result[svc] = {"error": str(e)}
+    if not manual:  # 사고다발지역은 data.go.kr(하루 1만 건 한도)이라 자동 수집 때 같이 확인
+        from koroad_collector import collect_hotspots
+        try:
+            result["hotspots"] = collect_hotspots()
+        except Exception as e:
+            result["hotspots"] = {"error": str(e)}
     return result
 
 

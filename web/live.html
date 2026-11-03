@@ -26,10 +26,18 @@
   main { display:grid; grid-template-columns:1fr 360px; gap:12px; padding:14px 20px; height:calc(100vh - 200px); min-height:480px; }
   #map { border-radius:10px; border:1px solid var(--line); }
   .map-tiles-dark { filter: invert(100%) hue-rotate(180deg) brightness(95%) contrast(90%); }
-  aside { display:flex; flex-direction:column; gap:12px; min-height:0; }
+  aside { display:flex; flex-direction:column; gap:10px; min-height:0; overflow-y:auto; padding-right:2px; }
   .panel { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px; }
   .panel h2 { margin:0 0 8px; font-size:14px; }
-  #feed { flex:1; overflow-y:auto; min-height:0; }
+  /* 패널 제목을 누르면 접고 펼침 */
+  details.panel > summary { cursor:pointer; font-weight:bold; font-size:14px; list-style:none; display:flex; align-items:center; gap:6px; user-select:none; }
+  details.panel > summary::-webkit-details-marker { display:none; }
+  details.panel > summary::before { content:'▾'; color:var(--muted); transition:transform .15s; }
+  details.panel:not([open]) > summary::before { transform:rotate(-90deg); }
+  details.panel[open] > summary { margin-bottom:8px; }
+  .panel-sub { color:var(--muted); font-weight:normal; font-size:11px; }
+  .panel-body { overflow-y:auto; }
+  #feed { max-height:260px; }
   .ev { padding:8px; border-radius:6px; border:1px solid var(--line); margin-bottom:6px; cursor:pointer; font-size:13px; }
   .ev:hover { border-color:var(--primary); }
   .ev .t { font-weight:bold; }
@@ -39,12 +47,30 @@
   .ended { opacity:.5; }
   #cctv-box { font-size:13px; }
   #cctv-box .muted { color:var(--muted); font-size:12px; }
+  #hotspot-list { max-height:220px; }
+  .dot { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:6px; }
+  .place { color:var(--primary); cursor:pointer; text-decoration:underline dotted; }
+  @keyframes jampulse { 0%,100% { stroke-opacity:1; } 50% { stroke-opacity:.15; } }
+  .jam-pulse { animation: jampulse 1.2s ease-in-out infinite; }
+  #briefing { white-space:pre-wrap; font-size:13px; line-height:1.55; max-height:260px; }
+  .muted { color:var(--muted); font-size:12px; }
   #cctv-box video { width:100%; border-radius:6px; background:#000; margin-top:6px; }
   .legend { background:rgba(19,28,46,.9); padding:8px 10px; border-radius:6px; font-size:12px; color:var(--text); line-height:1.6; }
   .legend i { display:inline-block; width:18px; height:4px; margin-right:6px; vertical-align:middle; }
   footer { padding:0 20px 14px; font-size:11px; color:var(--muted); }
   #msg { font-size:12px; color:var(--yellow); }
-  @media (max-width: 900px) { .cards { grid-template-columns:repeat(2,1fr); } main { grid-template-columns:1fr; height:auto; } #map { height:60vh; } }
+  /* 태블릿·모바일: 지도 아래로 패널을 세로로 쌓음 */
+  @media (max-width: 900px) {
+    header { padding:10px 12px; }
+    .head-right { width:100%; justify-content:space-between; flex-wrap:wrap; gap:6px; font-size:11px; }
+    .cards { grid-template-columns:repeat(2,1fr); gap:8px; padding:10px 12px 0; }
+    .card { padding:10px; } .card .value { font-size:19px; }
+    main { grid-template-columns:1fr; height:auto; min-height:0; padding:10px 12px; }
+    #map { height:55vh; }
+    aside { overflow:visible; }
+    footer { padding:0 12px 12px; }
+    .legend { font-size:10px; line-height:1.4; padding:6px 8px; }
+  }
 </style>
 </head>
 <body>
@@ -70,19 +96,30 @@
 <main>
   <div id="map"></div>
   <aside>
-    <div class="panel" style="display:flex;flex-direction:column;flex:1;min-height:0">
-      <h2>돌발 이벤트 피드</h2>
-      <div id="feed"><div class="muted">불러오는 중…</div></div>
-    </div>
-    <div class="panel" id="cctv-box">
-      <h2>CCTV</h2>
-      <div class="muted">지도에서 CCTV나 돌발을 누르면 가장 가까운 CCTV를 보여 줍니다.</div>
-    </div>
+    <details class="panel" open>
+      <summary>돌발 이벤트 피드 <span class="panel-sub" id="feed-count"></span></summary>
+      <div id="feed" class="panel-body"><div class="muted">불러오는 중…</div></div>
+    </details>
+    <details class="panel" open>
+      <summary>사고다발지역 <span class="panel-sub">도로교통공단 · 누르면 이동</span></summary>
+      <div id="hotspot-list" class="panel-body"></div>
+    </details>
+    <details class="panel" open>
+      <summary>AI 대응 브리핑</summary>
+      <button id="brief-btn" onclick="makeBriefing()" style="padding:4px 10px;font-size:12px;margin-bottom:8px">브리핑 생성</button>
+      <div id="briefing" class="panel-body muted">마지막 수집 데이터로 Gemini가 대응 브리핑을 작성합니다.</div>
+    </details>
+    <details class="panel" id="cctv-panel" open>
+      <summary>CCTV</summary>
+      <div id="cctv-box">
+        <div class="muted">지도에서 CCTV를 누르면 영상을 보여 줍니다. 돌발·사고다발지역을 누르면 500m 안에 CCTV가 있을 때만 자동으로 보여 줍니다.</div>
+      </div>
+    </details>
   </aside>
 </main>
 
 <footer>
-  데이터 출처: 국가교통정보센터(ITS) 교통소통·돌발상황·CCTV 정보, 표준노드링크(2026-10-14) · 지도 © OpenStreetMap contributors
+  데이터 출처: 국가교통정보센터(ITS) 교통소통·돌발상황·CCTV 정보, 표준노드링크(2026-10-14) · 도로교통공단 사고다발지역 · 브리핑 Google Gemini · 지도 © OpenStreetMap contributors
   · <a href="/legacy" style="color:var(--muted)">옛 사고 데이터 대시보드</a>
 </footer>
 
@@ -94,17 +131,25 @@ L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',
 const trafficLayer = L.layerGroup().addTo(map);
 const eventLayer = L.layerGroup().addTo(map);
 const cctvLayer = L.layerGroup().addTo(map);
-L.control.layers(null, { '소통 (구간 속도)': trafficLayer, '돌발 (사고·공사·통제)': eventLayer, 'CCTV': cctvLayer },
-  { collapsed: false }).addTo(map);
+const hotspotLayer = L.layerGroup().addTo(map);
+const HOTSPOT_COLORS = { '지자체별': '#f43f5e', '법규위반': '#a855f7', '자전거': '#f97316', '결빙': '#38bdf8' };
+L.control.layers(null, { '소통 (구간 속도)': trafficLayer, '돌발 (사고·공사·통제)': eventLayer, 'CCTV': cctvLayer, '사고다발지역 (도로교통공단)': hotspotLayer },
+  { collapsed: window.innerWidth < 900 }).addTo(map);
 
 const legend = L.control({ position: 'bottomleft' });
 legend.onAdd = () => Object.assign(L.DomUtil.create('div', 'legend'), { innerHTML:
-  '<i style="background:#22c55e"></i>원활<br><i style="background:#eab308"></i>서행<br><i style="background:#ef4444"></i>정체<br><i style="background:#64748b"></i>정보 없음' });
+  '<i style="background:#22c55e"></i>원활<br><i style="background:#eab308"></i>서행<br><i style="background:#ef4444"></i>정체<br><i style="background:#64748b"></i>정보 없음<br>' +
+  Object.entries(HOTSPOT_COLORS).map(([k, c]) => `<i style="background:${c};height:10px;opacity:.6"></i>사고다발 ${k}`).join('<br>') });
 legend.addTo(map);
 
-let links = null, status = null;
+let links = null, status = null, linkMid = {}, hotspotLayers = {};
+const NEAR_KM = { road: 0.3, cctv: 0.5, event: 0.5 };  // 사고다발지역 주변 도로 300m, CCTV·돌발 500m
+const pulseRenderer = L.svg();  // 깜빡임(CSS 애니메이션)은 SVG에서만 가능
+// Gemini 마크다운(**굵게**, * 글머리)을 일반 텍스트로
+const plain = t => t.replace(/\*\*/g, '').replace(/^\s*\* /gm, '• ');
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const isJam = (sp, rank) => sp != null && sp < (isHighway(rank) ? 40 : 15);
 const isHighway = rank => rank === '101' || rank === '102';
 // ITS 소통 색 기준: 고속도로 70/40, 그 외 30/15 km/h
 function speedColor(speed, rank) {
@@ -154,7 +199,7 @@ function render() {
       const p = f.properties, sp = s.speeds[p.id];
       if (sp != null) {
         if (!isHighway(p.rank)) { sum += sp; n++; }
-        if (sp < (isHighway(p.rank) ? 40 : 15)) jam++;
+        if (isJam(sp, p.rank)) jam++;
       }
       layer.bindTooltip(`${esc(p.name)} · ${sp != null ? sp.toFixed(0) + ' km/h' : '정보 없음'} (제한 ${p.max_spd})`);
     }
@@ -166,7 +211,7 @@ function render() {
     if (e.lat == null) return;
     L.circleMarker([e.lat, e.lon], { radius: 9, color: '#fff', weight: 2, fillColor: e.event_type === '교통사고' ? '#ef4444' : '#eab308', fillOpacity: 1 })
       .bindPopup(`<b>${esc(e.event_type)} · ${esc(e.event_detail_type)}</b><br>${esc(e.road_name)} ${esc(e.road_drc_type)}<br>${esc(e.message)}<br>발생 ${fmtTime(e.start_date)}`)
-      .on('click', () => showNearestCctv(e))
+      .on('click', () => showNearestCctv(e, '돌발 지점'))
       .addTo(eventLayer);
   });
 
@@ -174,6 +219,26 @@ function render() {
   cctvLayer.clearLayers();
   s.cctv.forEach(c => L.circleMarker([c.lat, c.lon], { radius: 5, color: '#38bdf8', weight: 1, fillColor: '#0ea5e9', fillOpacity: .8 })
     .bindTooltip(esc(c.name)).on('click', () => showCctv(c)).addTo(cctvLayer));
+
+  // 사고다발지역 (공단이 준 반경 구역 폴리곤)
+  hotspotLayer.clearLayers();
+  s.hotspots.forEach(h => {
+    const color = HOTSPOT_COLORS[h.category] || '#f43f5e';
+    const popup = `<b>[${esc(h.category)}] ${esc(h.spot_nm)}</b><br>${h.year}년 발생 ${h.occrrnc_cnt}건 · 사상자 ${h.caslt_cnt}명 (사망 ${h.dth_dnv_cnt}, 중상 ${h.se_dnv_cnt})<br><span style="font-size:11px">선정 기준: ${esc(h.criteria)}<br>출처: 도로교통공단</span>`;
+    const layer = h.geom ? L.geoJSON(h.geom, { style: { color, weight: 2, fillColor: color, fillOpacity: .25 } })
+                         : L.circle([h.lat, h.lon], { radius: 150, color, fillOpacity: .25 });
+    layer.bindPopup(popup).addTo(hotspotLayer);
+    hotspotLayers[h.hotspot_key] = layer;
+  });
+  // B: 사고다발지역 300m 안의 정체 구간을 굵게 깜빡임 (사고다발지역 레이어와 함께 켜고 꺼짐)
+  const nearJam = links.features.filter(f => isJam(s.speeds[f.properties.id], f.properties.rank) &&
+    s.hotspots.some(h => distKm(linkMid[f.properties.id], h) <= NEAR_KM.road));
+  if (nearJam.length) L.geoJSON({ type: 'FeatureCollection', features: nearJam },
+    { renderer: pulseRenderer, style: { color: '#ef4444', weight: 9, className: 'jam-pulse' }, interactive: false }).addTo(hotspotLayer);
+  renderHotspotList();
+
+  // 저장된 브리핑
+  if (s.briefing) renderBriefing(s.briefing.briefing);
 
   // 상단 카드
   document.getElementById('c-events').textContent = s.events.length + '건';
@@ -185,6 +250,7 @@ function render() {
 
   // 이벤트 피드 (최근 20건, 지금 없는 건 흐리게)
   const activeKeys = new Set(s.events.map(e => e.event_key));
+  document.getElementById('feed-count').textContent = `진행 중 ${s.events.length} · 최근 ${s.feed.length}`;
   document.getElementById('feed').innerHTML = s.feed.length ? s.feed.map(e => `
     <div class="ev ${activeKeys.has(e.event_key) ? '' : 'ended'}" data-key="${esc(e.event_key)}">
       <div class="t"><span class="badge ${e.event_type === '교통사고' ? 'acc' : e.event_type === '공사' ? 'cor' : ''}">${esc(e.event_type)}</span>${esc(e.road_name)} ${esc(e.road_drc_type)}</div>
@@ -193,23 +259,78 @@ function render() {
     </div>`).join('') : '<div class="muted">돌발 정보가 없습니다.</div>';
   document.querySelectorAll('#feed .ev').forEach(el => el.onclick = () => {
     const e = s.feed.find(x => x.event_key === el.dataset.key);
-    if (e && e.lat != null) { map.flyTo([e.lat, e.lon], 15); showNearestCctv(e); }
+    if (e && e.lat != null) { map.flyTo([e.lat, e.lon], 15); showNearestCctv(e, '돌발 지점'); }
   });
 }
 
-function showNearestCctv(e) {
-  if (!status.cctv.length || e.lat == null) return;
-  const best = status.cctv.reduce((a, c) => distKm(e, c) < distKm(e, a) ? c : a);
-  showCctv(best, distKm(e, best));
+function showNearestCctv(p, label) {
+  if (!status.cctv.length || p.lat == null) return;
+  const best = status.cctv.reduce((a, c) => distKm(p, c) < distKm(p, a) ? c : a);
+  const km = distKm(p, best);
+  if (km <= NEAR_KM.cctv) return showCctv(best, km, label);
+  if (hls) { hls.destroy(); hls = null; }
+  document.getElementById('cctv-panel').open = true;
+  document.getElementById('cctv-box').innerHTML = `<div class="muted">${label} 500m 안에 CCTV가 없습니다 (가장 가까운 곳 ${km.toFixed(1)}km).</div>`;
+}
+
+// 사고다발지역 목록: 발생 건수 순, 주변 300m 도로 지금 평균 속도, 500m 안 진행 중 돌발이면 ⚠
+function renderHotspotList() {
+  const s = status;
+  const rows = [...s.hotspots].sort((a, b) => b.occrrnc_cnt - a.occrrnc_cnt).map(h => {
+    const sp = links.features.map(f => f.properties.id)
+      .filter(id => s.speeds[id] != null && distKm(linkMid[id], h) <= NEAR_KM.road).map(id => s.speeds[id]);
+    const avg = sp.length ? sp.reduce((a, b) => a + b, 0) / sp.length : null;
+    const ev = s.events.some(e => e.lat != null && distKm(e, h) <= NEAR_KM.event);
+    return `<div class="ev" data-key="${esc(h.hotspot_key)}">
+      <div class="t"><span class="dot" style="background:${HOTSPOT_COLORS[h.category] || '#f43f5e'}"></span>${esc(h.spot_nm)} <span class="badge">${esc(h.category)}</span></div>
+      <div class="m">${h.occrrnc_cnt}건 · 사상자 ${h.caslt_cnt} · 지금 ${avg != null ? avg.toFixed(0) + 'km/h' : '속도 정보 없음'}${ev ? ' · ⚠ 근처 돌발' : ''}</div>
+    </div>`;
+  });
+  const box = document.getElementById('hotspot-list');
+  box.innerHTML = rows.length ? rows.join('') : '<div class="muted">사고다발지역 정보가 없습니다.</div>';
+  box.querySelectorAll('.ev').forEach(el => el.onclick = () => focusHotspot(s.hotspots.find(h => h.hotspot_key === el.dataset.key)));
+}
+
+function focusHotspot(h) {
+  const layer = hotspotLayers[h.hotspot_key];
+  if (!map.hasLayer(hotspotLayer)) map.addLayer(hotspotLayer);
+  map.flyToBounds(layer.getBounds(), { maxZoom: 17, padding: [60, 60] });
+  map.once('moveend', () => layer.openPopup([h.lat, h.lon]));
+  showNearestCctv(h, '사고다발지역');
+}
+
+function focusRoad(name) {
+  const fs = links.features.filter(f => f.properties.name === name);
+  if (fs.length) map.flyToBounds(L.geoJSON({ type: 'FeatureCollection', features: fs }).getBounds(), { maxZoom: 16, padding: [40, 40] });
+}
+
+// A: 브리핑 속 사고다발지역 이름·도로명을 누르면 지도 이동
+function renderBriefing(text) {
+  const html = esc(plain(text)), places = {};
+  status.hotspots.forEach(h => {
+    places[esc(h.spot_nm)] = () => focusHotspot(h);
+    const m = h.spot_nm.match(/\(([^)]+?)(?: 부근)?\)/);  // "세종 어진동(어진교차로 부근)" → "어진교차로"
+    if (m && m[1].length >= 3 && !/^\d+$/.test(m[1])) places[esc(m[1])] = () => focusHotspot(h);
+  });
+  new Set(links.features.map(f => f.properties.name)).forEach(n => {
+    if (n && n !== '-' && n.length >= 3 && !places[n] && html.includes(n)) places[n] = () => focusRoad(n);
+  });
+  const keys = Object.keys(places).filter(k => html.includes(k)).sort((a, b) => b.length - a.length);
+  const box = document.getElementById('briefing');
+  box.innerHTML = keys.length
+    ? html.replace(new RegExp(keys.map(k => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'g'),
+        m => `<span class="place" data-place="${m}">${m}</span>`)
+    : html;
+  box.querySelectorAll('.place').forEach(el => el.onclick = () => places[el.dataset.place]());
 }
 
 let hls = null;
-async function showCctv(c, km) {
+async function showCctv(c, km, label) {
   if (hls) { hls.destroy(); hls = null; }
   const box = document.getElementById('cctv-box');
-  box.innerHTML = `<h2>CCTV</h2>
-    <div><b>${esc(c.name)}</b> <span class="badge">${c.road_type === 'ex' ? '고속도로' : '국도'}</span></div>
-    ${km != null ? `<div class="muted">돌발 지점에서 ${km.toFixed(1)}km</div>` : ''}
+  document.getElementById('cctv-panel').open = true;
+  box.innerHTML = `<div><b>${esc(c.name)}</b> <span class="badge">${c.road_type === 'ex' ? '고속도로' : '국도'}</span></div>
+    ${km != null ? `<div class="muted">${label}에서 ${(km * 1000).toFixed(0)}m</div>` : ''}
     <video id="cctv-video" muted autoplay playsinline controls></video>
     <div class="muted" id="cctv-note">영상 불러오는 중…</div>`;
   const video = document.getElementById('cctv-video'), note = document.getElementById('cctv-note');
@@ -229,9 +350,18 @@ async function showCctv(c, km) {
   } catch (err) { fail(); }
 }
 
+async function makeBriefing() {
+  const btn = document.getElementById('brief-btn'), box = document.getElementById('briefing');
+  btn.disabled = true; box.textContent = 'Gemini가 브리핑을 작성하는 중…';
+  try { renderBriefing((await api('getAiBriefing')).briefing); }
+  catch (err) { box.textContent = '브리핑 생성 실패: ' + err.message; }
+  finally { btn.disabled = false; }
+}
+
 async function load() {
   try {
     [links, status] = await Promise.all([fetch('/static/sejong_links.geojson').then(r => r.json()), api('getLiveStatus')]);
+    links.features.forEach(f => { const c = f.geometry.coordinates[Math.floor(f.geometry.coordinates.length / 2)]; linkMid[f.properties.id] = { lon: c[0], lat: c[1] }; });
     render();
   } catch (err) {
     document.getElementById('feed').innerHTML = `<div class="muted">불러오기 실패: ${esc(err.message)}</div>`;
