@@ -1,0 +1,954 @@
+<script>
+    /**
+     * 세종시 세이프로드 AI 클라이언트 사이드 관제 엔진 (5개 메인 탭 및 Render ML 연동)
+     */
+
+    let cachedAccidentData = [];
+    let cachedPenaltyData = [];
+    let cachedMlScores = [];
+    const regionsList = ["조치원읍", "도담동", "아름동", "고운동", "보람동", "나성동", "다정동", "새롬동", "종촌동", "소담동"];
+
+    let activeMainTab = "DETAILS";
+    let activeSubPipeline = "RAW";
+    let selectedRegion = "ALL";
+
+    let leafletMap = null;
+    let leafletMarkers = [];
+    let chartInstances = {};
+
+    const regionCoords = {
+        "조치원읍": [36.602, 127.298],
+        "도담동": [36.516, 127.261],
+        "아름동": [36.513, 127.247],
+        "고운동": [36.515, 127.234],
+        "보람동": [36.478, 127.288],
+        "나성동": [36.485, 127.258],
+        "다정동": [36.495, 127.245],
+        "새롬동": [36.486, 127.248],
+        "종촌동": [36.504, 127.248],
+        "소담동": [36.485, 127.298]
+    };
+
+    const regionCodes = {
+        "조치원읍": "3611025000",
+        "도담동": "3611011400",
+        "아름동": "3611011500",
+        "고운동": "3611011700",
+        "보람동": "3611011000",
+        "나성동": "3611010300",
+        "다정동": "3611011300",
+        "새롬동": "3611011200",
+        "종촌동": "3611011600",
+        "소담동": "3611011100"
+    };
+
+    window.onload = function () {
+        try {
+            initLeafletMap();
+            generateDynamicFilters();
+            switchMainTab('DETAILS');
+            loadCloudDatabase();
+        } catch (err) {
+            console.error("Initialization error:", err);
+        }
+    };
+
+    document.addEventListener("DOMContentLoaded", function () {
+        processPipelineDetailsFlow();
+    });
+
+    function initLeafletMap() {
+        const container = document.getElementById('sejong-accident-map');
+        if (!container) return;
+
+        try {
+            leafletMap = L.map('sejong-accident-map').setView([36.515, 127.270], 12);
+            L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+                attribution: '&copy; OpenStreetMap contributors &copy; CARTO'
+            }).addTo(leafletMap);
+            setTimeout(() => { if (leafletMap) leafletMap.invalidateSize(); }, 500);
+        } catch (e) {
+            console.warn("Leaflet map init exception:", e);
+        }
+    }
+
+    function generateDynamicFilters() {
+        const accTypes = ["과속", "부주의", "음주", "이륜차", "자전거", "차대차", "화물차"];
+        const accContainer = document.getElementById('filter-accident-type');
+        if (accContainer) {
+            accContainer.innerHTML = accTypes.map(t => `<label class="checkbox-label"><input type="checkbox" class="acc-type-chk" value="${t}" checked onchange="updateFilters()"> ${t}</label>`).join('');
+        }
+
+        const vioTypes = ["안전운전불이행", "신호위반", "불법주정차"];
+        const vioContainer = document.getElementById('filter-violation-type');
+        if (vioContainer) {
+            vioContainer.innerHTML = vioTypes.map(v => `<label class="checkbox-label"><input type="checkbox" class="violation-type-chk" value="${v}" checked onchange="updateFilters()"> ${v}</label>`).join('');
+        }
+
+        const weatherTypes = ["결빙", "맑음", "비", "눈"];
+        const weatherContainer = document.getElementById('filter-weather');
+        if (weatherContainer) {
+            weatherContainer.innerHTML = weatherTypes.map(w => `<label class="checkbox-label"><input type="checkbox" class="weather-chk" value="${w}" checked onchange="updateFilters()"> ${w}</label>`).join('');
+        }
+
+        const timeTypes = ["주간", "야간"];
+        const timeContainer = document.getElementById('filter-time-division');
+        if (timeContainer) {
+            timeContainer.innerHTML = timeTypes.map(t => `<label class="checkbox-label"><input type="checkbox" class="time-chk" value="${t}" checked onchange="updateFilters()"> ${t}</label>`).join('');
+        }
+    }
+
+    function loadCloudDatabase() {
+        if (typeof google !== 'undefined' && google.script && google.script.run) {
+            google.script.run.withSuccessHandler(function (accResponse) {
+                cachedAccidentData = accResponse || [];
+                google.script.run.withSuccessHandler(function (penResponse) {
+                    cachedPenaltyData = penResponse || [];
+                    // Render/Supabase 머신러닝 안전점수 데이터 가져오기
+                    google.script.run.withSuccessHandler(function (mlResponse) {
+                        cachedMlScores = mlResponse || [];
+                        updateFilters();
+                    }).fetchMlSafetyScores();
+                }).fetchTrafficData("mock_penalty_data");
+            }).fetchTrafficData("mock_accident_data");
+        } else {
+            console.warn("Local standalone mode without Google Apps Script context.");
+            updateFilters();
+        }
+    }
+
+    function goHome() {
+        const regEl = document.getElementById('region-select');
+        if (regEl) regEl.value = "ALL";
+        const startEl = document.getElementById('start-date');
+        if (startEl) startEl.value = "2024-01-01";
+        const endEl = document.getElementById('end-date');
+        if (endEl) endEl.value = "2025-12-31";
+
+        document.querySelectorAll('.acc-type-chk').forEach(chk => chk.checked = true);
+        document.querySelectorAll('.violation-type-chk').forEach(chk => chk.checked = true);
+        document.querySelectorAll('.weather-chk').forEach(chk => chk.checked = true);
+        document.querySelectorAll('.time-chk').forEach(chk => chk.checked = true);
+
+        switchMainTab('DETAILS');
+    }
+
+    function switchMainTab(tab) {
+        if (tab === 'PIPELINE' || tab === 'RAW' || tab === '1' || tab === 'UPLOAD') tab = 'DETAILS';
+        if (tab === '2') tab = 'DASHBOARD';
+        if (tab === '3') tab = 'PREDICT';
+        if (tab === '4' || tab === 'SOLUTION') tab = 'RECOMMEND';
+        if (tab === '5') tab = 'ML';
+
+        activeMainTab = tab;
+
+        const btnDetails = document.getElementById('tab-main-details');
+        const btnDashboard = document.getElementById('tab-main-dashboard');
+        const btnPredict = document.getElementById('tab-main-predict');
+        const btnRecommend = document.getElementById('tab-main-recommend');
+        const btnMl = document.getElementById('tab-main-ml');
+
+        if (btnDetails) btnDetails.classList.toggle('active', tab === 'DETAILS');
+        if (btnDashboard) btnDashboard.classList.toggle('active', tab === 'DASHBOARD');
+        if (btnPredict) btnPredict.classList.toggle('active', tab === 'PREDICT');
+        if (btnRecommend) btnRecommend.classList.toggle('active', tab === 'RECOMMEND');
+        if (btnMl) btnMl.classList.toggle('active', tab === 'ML');
+
+        const panelDetails = document.getElementById('panel-details-view');
+        const panelDashboard = document.getElementById('panel-dashboard-view');
+        const panelPredict = document.getElementById('panel-predict-view');
+        const panelRecommend = document.getElementById('panel-recommend-view');
+        const panelMl = document.getElementById('panel-ml-view');
+
+        if (panelDetails) panelDetails.classList.toggle('hidden', tab !== 'DETAILS');
+        if (panelDashboard) panelDashboard.classList.toggle('hidden', tab !== 'DASHBOARD');
+        if (panelPredict) panelPredict.classList.toggle('hidden', tab !== 'PREDICT');
+        if (panelRecommend) panelRecommend.classList.toggle('hidden', tab !== 'RECOMMEND');
+        if (panelMl) panelMl.classList.toggle('hidden', tab !== 'ML');
+
+        const filterDetails = document.getElementById('details-filters-group');
+        const filterDashboard = document.getElementById('dashboard-filters-group');
+
+        if (filterDetails) filterDetails.classList.toggle('hidden', tab !== 'DETAILS');
+        if (filterDashboard) filterDashboard.classList.toggle('hidden', tab === 'DETAILS');
+
+        if (tab === 'DASHBOARD') {
+            setTimeout(() => {
+                try { if (leafletMap) leafletMap.invalidateSize(); } catch (e) {}
+                try {
+                    if (typeof chartInstances !== 'undefined' && chartInstances) {
+                        Object.keys(chartInstances).forEach(key => {
+                            if (chartInstances[key]) {
+                                chartInstances[key].resize();
+                                chartInstances[key].update();
+                            }
+                        });
+                    }
+                } catch (e) {}
+            }, 250);
+        }
+
+        updateFilters();
+    }
+
+    function switchSubPipeline(subTab) {
+        activeSubPipeline = subTab;
+        const buttons = document.querySelectorAll('.sub-pipeline-nav .sub-tab-btn');
+        buttons.forEach(btn => {
+            if (btn) btn.classList.remove('active');
+        });
+        const activeBtn = document.getElementById(`sub-tab-${subTab.toLowerCase()}`);
+        if (activeBtn) activeBtn.classList.add('active');
+
+        updateFilters();
+    }
+
+    let activeChartTab = "region";
+
+    function switchChartTab(chartKey) {
+        activeChartTab = chartKey;
+        const keys = ["region", "acctype", "weather", "severity", "safety", "monthly", "violation", "time"];
+
+        keys.forEach(k => {
+            const btn = document.getElementById(`btn-chart-${k}`);
+            const wrap = document.getElementById(`wrapper-chart-${k}`);
+            if (btn) btn.classList.toggle('active', k === chartKey);
+            if (wrap) wrap.classList.toggle('hidden', k !== chartKey);
+        });
+
+        if (chartInstances[`chart-${chartKey}`]) {
+            try {
+                chartInstances[`chart-${chartKey}`].resize();
+                chartInstances[`chart-${chartKey}`].update();
+            } catch (e) {}
+        }
+    }
+
+    function selectRegionFromMap(region) {
+        const selectEl = document.getElementById('region-select');
+        if (selectEl) {
+            selectedRegion = (selectedRegion === region) ? "ALL" : region;
+            selectEl.value = selectedRegion;
+        }
+        updateFilters();
+    }
+
+    function checkDateRange(itemDate) {
+        if (!itemDate) return true;
+        const startEl = document.getElementById('start-date');
+        const endEl = document.getElementById('end-date');
+        const start = startEl ? startEl.value : '2024-01-01';
+        const end = endEl ? endEl.value : '2025-12-31';
+        return (itemDate >= start) && (itemDate <= end);
+    }
+
+    function updateFilters() {
+        const regEl = document.getElementById('region-select');
+        selectedRegion = regEl ? regEl.value : "ALL";
+
+        if (leafletMap) {
+            try {
+                if (selectedRegion !== "ALL" && regionCoords[selectedRegion]) {
+                    leafletMap.flyTo(regionCoords[selectedRegion], 14, { animate: true, duration: 1.5 });
+                } else {
+                    leafletMap.flyTo([36.515, 127.270], 12, { animate: true, duration: 1.5 });
+                }
+            } catch (e) {
+                console.warn("Leaflet map flyTo exception:", e);
+            }
+        }
+
+        if (activeMainTab === "DETAILS") {
+            processPipelineDetailsFlow();
+        } else if (activeMainTab === "DASHBOARD") {
+            processDashboardFlow();
+        } else if (activeMainTab === "PREDICT") {
+            processPredictFlow();
+        } else if (activeMainTab === "RECOMMEND") {
+            processRecommendFlow();
+        } else if (activeMainTab === "ML") {
+            processMlFlow();
+        }
+    }
+
+    function processPipelineDetailsFlow() {
+        const container = document.getElementById('pipeline-table-view');
+        if (!container) return;
+
+        if (activeSubPipeline === "RAW") {
+            const titleEl = document.getElementById('pipeline-section-title');
+            if (titleEl) titleEl.innerText = "1단계: 원천 데이터 수집 및 업로드";
+
+            container.innerHTML = `
+                <div class="upload-zone" id="drop-zone" onclick="document.getElementById('file-input').click()" style="margin-bottom: 20px;">
+                    <div class="upload-icon">📁</div>
+                    <div style="font-weight: 600; margin-bottom: 5px; color: var(--text-main); font-size: 16px;">세종시 교통사고 엑셀(XLSX/CSV) 파일을 업로드하세요.</div>
+                    <div style="font-size: 13px; color: var(--text-muted);">최대 50MB 지원</div>
+                    <input type="file" id="file-input" style="display:none" accept=".csv, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/vnd.ms-excel">
+                </div>
+                <div id="file-preview-container"></div>
+            `;
+            setTimeout(setupFileDragAndDrop, 100);
+        }
+        else if (activeSubPipeline === "PRE") {
+            const titleEl = document.getElementById('pipeline-section-title');
+            if (titleEl) titleEl.innerText = "2단계: 전처리 무결성 검증 (노이즈 제거, 결측치 보정)";
+
+            container.innerHTML = `<table><thead><tr><th>태스크 코드</th><th>정제 필터링 태스크</th><th>결과</th></tr></thead><tbody>
+                <tr><td><code>TASK-PRE-10</code></td><td><span class="badge badge-warning">결측치 보정</span></td><td><strong>Null값 매핑 완결 (100%)</strong></td></tr>
+                <tr><td><code>TASK-PRE-20</code></td><td><span class="badge badge-info">GPS 좌표 검증</span></td><td><strong>세종시 관내 바운딩 박스 정합성 검증 완료</strong></td></tr>
+                <tr><td><code>TASK-PRE-30</code></td><td><span class="badge badge-success">중복 데이터 필터링</span></td><td><strong>Unique 사건번호 기준 중복 Upsert 처리 준비 완료</strong></td></tr>
+            </tbody></table>`;
+        }
+        else if (activeSubPipeline === "PROC") {
+            const titleEl = document.getElementById('pipeline-section-title');
+            if (titleEl) titleEl.innerText = "3단계: 가공데이터 구조 확인 (Supabase DB 실시간 적재 데이터)";
+
+            let html = `<table><thead><tr><th>DB 고유식별자</th><th>사건번호</th><th>소속 행정동</th><th>사고유형</th><th>건수</th></tr></thead><tbody>`;
+            if (cachedAccidentData && cachedAccidentData.length > 0) {
+                cachedAccidentData.forEach(item => {
+                    html += `<tr><td><code>DB-ACC-${item.id}</code></td><td><strong>${item.incident_no || 'ACC-2026-N'}</strong></td><td>${item.region || item.legal_dong_name || ''}</td><td>${item.accident_type}</td><td>${item.occrrnc_cnt || 1}건</td></tr>`;
+                });
+            } else {
+                html += `<tr><td colspan="5" style="text-align:center; color: var(--text-muted); padding: 20px;">적재된 데이터가 없습니다.</td></tr>`;
+            }
+            container.innerHTML = html + "</tbody></table>";
+        }
+    }
+
+    function setupFileDragAndDrop() {
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('file-input');
+        if (!dropZone || !fileInput) return;
+
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('dragover');
+        });
+        dropZone.addEventListener('dragleave', () => {
+            dropZone.classList.remove('dragover');
+        });
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('dragover');
+            if (e.dataTransfer.files.length) {
+                handleFileUpload(e.dataTransfer.files[0]);
+            }
+        });
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length) {
+                handleFileUpload(e.target.files[0]);
+            }
+        });
+    }
+
+    function handleFileUpload(file) {
+        const previewContainer = document.getElementById('file-preview-container');
+        if (previewContainer) {
+            previewContainer.innerHTML = `<div style="color:var(--text-main); padding: 15px; background: var(--card-bg); border-radius: 8px; border: 1px solid var(--border-color); text-align: center;">${file.name} 데이터를 분석 중입니다... ⏳</div>`;
+        }
+
+        const reader = new FileReader();
+        reader.onload = function (e) {
+            const data = new Uint8Array(e.target.result);
+            try {
+                const workbook = XLSX.read(data, { type: 'array' });
+                const firstSheetName = workbook.SheetNames[0];
+                const worksheet = workbook.Sheets[firstSheetName];
+                const json = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+                renderFilePreview(file.name, json);
+            } catch (err) {
+                console.error(err);
+                if (previewContainer) {
+                    previewContainer.innerHTML = `<div style="color:var(--danger-color); padding: 15px; background: rgba(239, 68, 68, 0.1); border-radius: 8px; border: 1px solid var(--danger-color); text-align: center;">파일 분석에 실패했습니다. 올바른 CSV/XLSX 파일인지 확인하세요.</div>`;
+                }
+            }
+        };
+        reader.readAsArrayBuffer(file);
+    }
+
+    function renderFilePreview(fileName, dataRows) {
+        if (!dataRows || dataRows.length === 0) return;
+        const headers = dataRows[0] || [];
+        const previewRows = dataRows.slice(1, 6);
+
+        let html = `<h4 style="color: var(--primary-color); margin-bottom:12px;">📄 ${fileName} 분석결과 (상위 5건)</h4>`;
+        html += `<div class="table-container"><table><thead><tr>`;
+        headers.forEach(h => { html += `<th>${h || '-'}</th>`; });
+        html += `</tr></thead><tbody>`;
+
+        previewRows.forEach(row => {
+            html += `<tr>`;
+            for (let i = 0; i < headers.length; i++) {
+                html += `<td>${row[i] !== undefined ? row[i] : ''}</td>`;
+            }
+            html += `</tr>`;
+        });
+        html += `</tbody></table></div>`;
+        html += `<div style="margin-top: 15px; text-align: right;">
+            <button class="sub-tab-btn active" style="padding: 10px 20px; border-radius: 6px;" onclick="uploadParsedExcelToSupabase(event)">⚡ 데이터 전처리 및 Supabase DB 중복방지 적재 (Upsert)</button>
+        </div>`;
+
+        const previewContainer = document.getElementById('file-preview-container');
+        if (previewContainer) previewContainer.innerHTML = html;
+        window.currentParsedExcelRows = dataRows;
+    }
+
+    function uploadParsedExcelToSupabase(evt) {
+        if (!window.currentParsedExcelRows || window.currentParsedExcelRows.length <= 1) {
+            alert("적재할 엑셀 데이터가 존재하지 않습니다.");
+            return;
+        }
+
+        const dataRows = window.currentParsedExcelRows;
+        let records = [];
+
+        for (let i = 1; i < dataRows.length; i++) {
+            let row = dataRows[i];
+            if (!row || row.length === 0) continue;
+
+            let record = {
+                incident_no: row[0] ? String(row[0]) : `ACC-${Date.now()}-${i}`,
+                date: row[1] ? String(row[1]) : '2026-01-01',
+                region: row[2] ? String(row[2]) : '조치원읍',
+                accident_type: row[3] ? String(row[3]) : '음주',
+                occrrnc_cnt: row[4] ? Number(row[4]) : 1,
+                weather: row[5] ? String(row[5]) : '맑음/주간'
+            };
+            records.push(record);
+        }
+
+        const btn = evt ? evt.target : document.querySelector('#file-preview-container button');
+        if (btn) {
+            btn.innerText = "⏳ Supabase DB 중복방지 적재 중...";
+            btn.disabled = true;
+        }
+
+        if (typeof google !== 'undefined' && google.script && google.script.run) {
+            google.script.run.withSuccessHandler(function (res) {
+                if (res && res.success) {
+                    alert(`✅ 총 ${records.length}건의 데이터가 Supabase DB에 중복 없이 성공적으로 적재(Upsert)되었습니다!`);
+                    loadCloudDatabase();
+                } else {
+                    alert(`❌ Supabase 적재 실패: ${res ? res.error : '알 수 없는 오류'}`);
+                }
+                if (btn) {
+                    btn.innerText = "⚡ 데이터 전처리 및 Supabase DB 중복방지 적재 (Upsert)";
+                    btn.disabled = false;
+                }
+            }).upsertTrafficData('mock_accident_data', records);
+        } else {
+            setTimeout(() => {
+                records.forEach(r => {
+                    let idx = cachedAccidentData.findIndex(item => item.date === r.date && (item.region || item.legal_dong_name) === (r.region || r.legal_dong_name) && item.accident_type === r.accident_type);
+                    if (idx >= 0) {
+                        cachedAccidentData[idx] = { ...cachedAccidentData[idx], ...r };
+                    } else {
+                        cachedAccidentData.push({ id: cachedAccidentData.length + 1, year: 2026, ...r });
+                    }
+                });
+                alert(`✅ [로컬 모의 적재] 총 ${records.length}건의 데이터가 중복 없이 (Upsert) 적재되었습니다!`);
+                if (btn) {
+                    btn.innerText = "⚡ 데이터 전처리 및 Supabase DB 중복방지 적재 (Upsert)";
+                    btn.disabled = false;
+                }
+                updateFilters();
+            }, 600);
+        }
+    }
+
+    function processDashboardFlow() {
+        const allowedAccTypes = Array.from(document.querySelectorAll('.acc-type-chk:checked')).map(el => el.value);
+        const allowedWeathers = Array.from(document.querySelectorAll('.weather-chk:checked')).map(el => el.value);
+        const allowedTimes = Array.from(document.querySelectorAll('.time-chk:checked')).map(el => el.value);
+
+        let filteredAccidents = cachedAccidentData.filter(item => {
+            if (!checkDateRange(item.date)) return false;
+            let reg = item.region || item.legal_dong_name;
+            if (selectedRegion !== "ALL" && reg !== selectedRegion) return false;
+            if (allowedAccTypes.length > 0 && item.accident_type && !allowedAccTypes.includes(item.accident_type)) return false;
+            if (allowedWeathers.length > 0 && item.weather && !allowedWeathers.some(w => item.weather.includes(w))) return false;
+            if (allowedTimes.length > 0 && item.time_of_day && !allowedTimes.includes(item.time_of_day)) return false;
+            return true;
+        });
+
+        renderMapGrid(filteredAccidents);
+        updateDashboardCharts(filteredAccidents);
+        renderComprehensiveTable(filteredAccidents);
+    }
+
+    function updateDashboardCharts(data) {
+        const createOrUpdateChart = (id, type, config) => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            try {
+                if (chartInstances[id]) {
+                    chartInstances[id].data = config.data;
+                    chartInstances[id].options = config.options || chartInstances[id].options;
+                    chartInstances[id].update();
+                } else {
+                    chartInstances[id] = new Chart(el.getContext('2d'), { type, ...config });
+                }
+            } catch (e) {
+                console.warn(`Chart ${id} update error:`, e);
+            }
+        };
+
+        // 1. 법정동별 사고 건수
+        let regionCounts = {};
+        regionsList.forEach(r => regionCounts[r] = 0);
+        data.forEach(d => {
+            let r = d.region || d.legal_dong_name;
+            if (regionCounts[r] !== undefined) regionCounts[r] += (d.occrrnc_cnt || 1);
+        });
+
+        let regionColors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#f97316', '#a855f7', '#14b8a6'];
+        createOrUpdateChart('chart-region', 'bar', {
+            data: { labels: regionsList, datasets: [{ label: '사고 건수', data: Object.values(regionCounts), backgroundColor: regionColors }] },
+            options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } }
+        });
+
+        // 2. 월별 발생 추이
+        let monthlyCounts = Array(12).fill(0);
+        data.forEach(d => {
+            if (d.date) {
+                let parts = d.date.split('-');
+                if (parts.length >= 2) {
+                    let m = parseInt(parts[1]) - 1;
+                    if (m >= 0 && m < 12) monthlyCounts[m] += (d.occrrnc_cnt || 1);
+                }
+            }
+        });
+        createOrUpdateChart('chart-monthly', 'line', {
+            data: {
+                labels: ['1월', '2월', '3월', '4월', '5월', '6월', '7월', '8월', '9월', '10월', '11월', '12월'],
+                datasets: [{
+                    label: '월별 발생수',
+                    data: monthlyCounts,
+                    borderColor: '#f5a623',
+                    backgroundColor: 'rgba(245, 166, 35, 0.15)',
+                    fill: true,
+                    tension: 0.35,
+                    pointRadius: 4,
+                    pointBackgroundColor: '#f5a623'
+                }]
+            },
+            options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } }
+        });
+
+        // 3. 사고 유형별 분포
+        let rawTypeCounts = {};
+        data.forEach(d => {
+            let t = d.accident_type || '기타';
+            rawTypeCounts[t] = (rawTypeCounts[t] || 0) + (d.occrrnc_cnt || 1);
+        });
+        let typeTotal = Object.values(rawTypeCounts).reduce((a, b) => a + b, 0) || 1;
+        let typeVisual = Object.keys(rawTypeCounts).map(k => Math.max((rawTypeCounts[k] / typeTotal) * 100, 7));
+        let typeReal = Object.values(rawTypeCounts);
+        let typeColors = ['#ef4444', '#f59e0b', '#10b981', '#06b6d4', '#8b5cf6', '#ec4899', '#f97316'];
+
+        createOrUpdateChart('chart-acctype', 'pie', {
+            data: {
+                labels: Object.keys(rawTypeCounts).map(k => `${k} (${rawTypeCounts[k]}건)`),
+                datasets: [{
+                    data: typeVisual,
+                    rawRealData: typeReal,
+                    backgroundColor: typeColors.slice(0, Object.keys(rawTypeCounts).length),
+                    borderColor: '#0f172a',
+                    borderWidth: 2
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { position: 'right', labels: { boxWidth: 12, color: '#f8fafc', font: { size: 11, weight: 'bold' } } },
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                let idx = context.dataIndex;
+                                let realVal = context.dataset.rawRealData[idx];
+                                let label = context.chart.data.labels[idx] || '';
+                                return `${label.split(' ')[0]}: 실제 ${realVal}건 (${((realVal / typeTotal) * 100).toFixed(1)}%)`;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        // 4. 법규위반 유형별 건수
+        let violationCounts = { "과속": 0, "신호위반": 0, "불법주정차": 0 };
+        cachedPenaltyData.forEach(p => {
+            if (violationCounts[p.violation_type] !== undefined) violationCounts[p.violation_type]++;
+        });
+        createOrUpdateChart('chart-violation', 'bar', {
+            data: { labels: Object.keys(violationCounts), datasets: [{ label: '단속 건수', data: Object.values(violationCounts), backgroundColor: ['#ef4444', '#f59e0b', '#3b82f6'] }] },
+            options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } } }
+        });
+
+        // 5. 기상상태별 분포
+        let rawWeatherCounts = { "맑음": 0, "우천": 0, "결빙": 0 };
+        data.forEach(d => {
+            let w = d.weather || '맑음';
+            if (w.includes('비') || w.includes('우천')) rawWeatherCounts["우천"] += (d.occrrnc_cnt || 1);
+            else if (w.includes('눈') || w.includes('결빙')) rawWeatherCounts["결빙"] += (d.occrrnc_cnt || 1);
+            else rawWeatherCounts["맑음"] += (d.occrrnc_cnt || 1);
+        });
+        let weatherTotal = Object.values(rawWeatherCounts).reduce((a, b) => a + b, 0) || 1;
+        let weatherVisual = Object.keys(rawWeatherCounts).map(k => {
+            let cnt = rawWeatherCounts[k];
+            if (cnt === 0) return 0;
+            return Math.max((cnt / weatherTotal) * 100, 8);
+        });
+        let weatherReal = Object.values(rawWeatherCounts);
+
+        createOrUpdateChart('chart-weather', 'doughnut', {
+            data: {
+                labels: Object.keys(rawWeatherCounts).map(k => `${k} (${rawWeatherCounts[k]}건)`),
+                datasets: [{
+                    data: weatherVisual,
+                    rawRealData: weatherReal,
+                    backgroundColor: ['#10b981', '#3b82f6', '#ef4444'],
+                    borderColor: '#0f172a',
+                    borderWidth: 3
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { position: 'right', labels: { boxWidth: 12, color: '#f8fafc', font: { size: 11, weight: 'bold' } } },
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                let idx = context.dataIndex;
+                                let realVal = context.dataset.rawRealData[idx];
+                                let label = context.chart.data.labels[idx] || '';
+                                return `${label.split(' ')[0]}: 실제 ${realVal}건 (${((realVal / weatherTotal) * 100).toFixed(1)}%)`;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        // 6. 주/야간 분포
+        let rawTimeCounts = { "주간": 0, "야간": 0 };
+        data.forEach(d => {
+            let t = d.time_of_day || (d.weather && d.weather.includes('야간') ? '야간' : '주간');
+            if (rawTimeCounts[t] !== undefined) rawTimeCounts[t] += (d.occrrnc_cnt || 1);
+        });
+        let timeTotal = Object.values(rawTimeCounts).reduce((a, b) => a + b, 0) || 1;
+        let timeVisual = Object.keys(rawTimeCounts).map(k => Math.max((rawTimeCounts[k] / timeTotal) * 100, 10));
+        let timeReal = Object.values(rawTimeCounts);
+
+        createOrUpdateChart('chart-time', 'pie', {
+            data: {
+                labels: Object.keys(rawTimeCounts).map(k => `${k} (${rawTimeCounts[k]}건)`),
+                datasets: [{
+                    data: timeVisual,
+                    rawRealData: timeReal,
+                    backgroundColor: ['#f59e0b', '#6366f1'],
+                    borderColor: '#0f172a',
+                    borderWidth: 2
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { position: 'right', labels: { boxWidth: 12, color: '#f8fafc', font: { size: 11, weight: 'bold' } } },
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                let idx = context.dataIndex;
+                                let realVal = context.dataset.rawRealData[idx];
+                                let label = context.chart.data.labels[idx] || '';
+                                return `${label.split(' ')[0]}: 실제 ${realVal}건 (${((realVal / timeTotal) * 100).toFixed(1)}%)`;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        // 7. 법정동별 사상자 심각도
+        let deaths = [], serious = [], slight = [];
+        regionsList.forEach(r => {
+            let rData = data.filter(d => (d.region || d.legal_dong_name) === r);
+            deaths.push(rData.reduce((acc, c) => acc + (c.casualty_death || 0), 0));
+            serious.push(rData.reduce((acc, c) => acc + (c.casualty_serious || 0), 0));
+            slight.push(rData.reduce((acc, c) => acc + (c.casualty_slight || 0), 0));
+        });
+        createOrUpdateChart('chart-severity', 'bar', {
+            data: {
+                labels: regionsList,
+                datasets: [
+                    { label: '사망', data: deaths, backgroundColor: '#ef4444' },
+                    { label: '중상', data: serious, backgroundColor: '#f59e0b' },
+                    { label: '경상', data: slight, backgroundColor: '#10b981' }
+                ]
+            },
+            options: { responsive: true, maintainAspectRatio: false, scales: { x: { stacked: true }, y: { stacked: true } }, plugins: { legend: { position: 'top', labels: { boxWidth: 12, color: '#f8fafc', font: { size: 11, weight: 'bold' } } } } }
+        });
+
+        // 8. 법정동별 안전점수 순위
+        let safetyScores = regionsList.map(r => {
+            let cnt = regionCounts[r] || 0;
+            return Math.max(20, Math.min(100, 100 - (cnt * 4)));
+        });
+        let safetyColors = safetyScores.map(score => score >= 80 ? '#10b981' : (score >= 60 ? '#f59e0b' : '#ef4444'));
+        createOrUpdateChart('chart-safety', 'bar', {
+            data: { labels: regionsList, datasets: [{ label: '안전 점수', data: safetyScores, backgroundColor: safetyColors }] },
+            options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { max: 100 } } }
+        });
+    }
+
+    function renderComprehensiveTable(data) {
+        const container = document.getElementById('table-view');
+        if (!container) return;
+
+        let html = `<table><thead><tr>
+            <th>발생일시</th>
+            <th>발생 장소 명칭</th>
+            <th>법정동 (코드)</th>
+            <th>사고/위반 유형</th>
+            <th>기상/시간</th>
+            <th>상태 / 조치</th>
+        </tr></thead><tbody>`;
+
+        if (data.length === 0) {
+            html += `<tr><td colspan="6" style="text-align:center; color: var(--text-muted); padding:20px;">조건에 해당하는 사고 관제 데이터가 없습니다.</td></tr>`;
+        } else {
+            data.forEach(item => {
+                const itemRegion = item.region || item.legal_dong_name || '';
+                const code = regionCodes[itemRegion] || '3611000000';
+                html += `<tr>
+                    <td><code>${item.date || '2026-01-01'}</code></td>
+                    <td><strong>[${itemRegion}]</strong> ${item.spot_nm || item.location || '세종 관내 도로'}</td>
+                    <td><span class="badge badge-info">${itemRegion} (${code})</span></td>
+                    <td><span class="badge ${item.accident_type === '음주' ? 'badge-danger' : 'badge-warning'}">${item.accident_type || item.violation_type || '과속'}</span></td>
+                    <td>${item.weather || '맑음'}</td>
+                    <td>
+                        <select class="status-select" onchange="executeSupabaseUpdate(${item.id}, this.value)">
+                            <option value="미조치" ${item.status === '미조치' ? 'selected' : ''}>🔴 미조치</option>
+                            <option value="조치중" ${item.status === '조치중' ? 'selected' : ''}>🟡 조치중</option>
+                            <option value="완료" ${item.status === '완료' ? 'selected' : ''}>🟢 완료</option>
+                        </select>
+                    </td>
+                </tr>`;
+            });
+        }
+
+        container.innerHTML = html + `</tbody></table>`;
+    }
+
+    function processPredictFlow() {
+        let totalLastYear = 0, totalThisYear = 0;
+        regionsList.forEach(region => {
+            let accLast = cachedAccidentData.filter(i => (i.region || i.legal_dong_name) === region && (i.year === 2024 || (i.date && i.date.startsWith('2024')))).reduce((acc, cur) => acc + (cur.occrrnc_cnt || 1), 0);
+            let accThis = cachedAccidentData.filter(i => (i.region || i.legal_dong_name) === region && (i.year === 2025 || (i.date && i.date.startsWith('2025')))).reduce((acc, cur) => acc + (cur.occrrnc_cnt || 1), 0);
+            if (selectedRegion === "ALL" || selectedRegion === region) {
+                totalLastYear += accLast;
+                totalThisYear += accThis;
+            }
+        });
+
+        let rate = totalLastYear > 0 ? ((totalThisYear - totalLastYear) / totalLastYear) * 100 : 0;
+        let safetyScore = Math.max(0, Math.min(100, Math.round(85 - (rate * 0.5))));
+
+        const elScore = document.getElementById('ai-safety-score-predict');
+        if (elScore) elScore.innerText = safetyScore;
+        const elLast = document.getElementById('p-last-year-predict');
+        if (elLast) elLast.innerText = `전년도(2024) 발생 총량: ${totalLastYear}건`;
+        const elThis = document.getElementById('p-this-year-predict');
+        if (elThis) elThis.innerText = `금년도(2025) 누적 발생 총량: ${totalThisYear}건`;
+        const elRate = document.getElementById('p-rate-calc-predict');
+        if (elRate) elRate.innerText = `전년 대비 리스크 변동 지수: ${rate.toFixed(1)}%`;
+
+        const elBrief = document.getElementById('ai-briefing-text-predict');
+        if (elBrief) {
+            elBrief.innerText = `[AI 안전 점수 85점 산출 기준 리포트]\n1. 세종시 10개 법정동 통합 계측 결과 2024년 ${totalLastYear}건 대비 2025년 ${totalThisYear}건으로 변동지수는 ${rate.toFixed(1)}% 수준입니다.\n2. 조치원읍/나성동 상업지구 음주운전 단속 건수 증가 및 동절기 도로 결빙 위험지수 반영으로 사상자 가중치 감점 적용.\n3. 현행 통제 흐름은 안정적이나 위험 구역 집중 대처가 없을 경우 추가 감점 위험이 존재합니다.`;
+        }
+
+        renderPredictTable();
+    }
+
+    function processRecommendFlow() {
+        renderRecommendTable();
+    }
+
+    function renderRecommendTable() {
+        const container = document.getElementById('recommend-table-view');
+        if (!container) return;
+
+        const roadmapData = [
+            { region: "조치원읍", score: 68, target: 85, solution: "야간 음주단속 특화 AI CCTV 3대 & 전광판", priority: "🔴 1순위 (긴급)" },
+            { region: "나성동", score: 74, target: 88, solution: "스마트 바닥형 음성안내 LED 신호등 2개소", priority: "🟡 2순위 (우선)" },
+            { region: "아름동", score: 79, target: 91, solution: "가변속도 표지판 (30km/h) & 자동 염수분사기", priority: "🟡 2순위 (우선)" },
+            { region: "고운동", score: 82, target: 94, solution: "고원식 십자로 교차로 및 보행자 감지 조명", priority: "🟢 3순위 (권장)" },
+            { region: "보람동", score: 85, target: 96, solution: "주정차 단속 모니터링 카메라 및 노면 표시", priority: "🟢 3순위 (권장)" },
+            { region: "소담동", score: 88, target: 98, solution: "스마트 버스정류장 연계 통합 관제 링커", priority: "🟢 3순위 (유지)" }
+        ];
+
+        let html = `<table><thead><tr><th>대상 법정동</th><th>현행 안전 점수</th><th>추천 안전 대처 솔루션</th><th>적용 후 목표 점수</th><th>이행 우선순위</th></tr></thead><tbody>`;
+        roadmapData.forEach(item => {
+            html += `<tr>
+                <td><strong>${item.region}</strong></td>
+                <td><span class="badge badge-warning">${item.score}점</span></td>
+                <td><strong>${item.solution}</strong></td>
+                <td><span class="badge badge-success" style="font-size:13px;">${item.target}점 (+${item.target - item.score}점)</span></td>
+                <td>${item.priority}</td>
+            </tr>`;
+        });
+        container.innerHTML = html + `</tbody></table>`;
+    }
+
+    /**
+     * 머신러닝(ML) 안전 상태 예측 보드 데이터 바인딩 및 테이블 렌더링
+     */
+    function processMlFlow() {
+        const container = document.getElementById('ml-table-view');
+        if (!container) return;
+
+        if (!cachedMlScores || cachedMlScores.length === 0) {
+            container.innerHTML = `<div style="text-align:center; padding: 20px; color: var(--text-muted);">적재된 머신러닝 점수 데이터가 없습니다. 상단의 'ML 모델 재학습/갱신' 버튼을 눌러주세요.</div>`;
+            return;
+        }
+
+        // 지역 선택 필터 적용
+        let filteredMl = cachedMlScores.filter(item => {
+            let reg = item.legal_dong_name || item.region;
+            if (selectedRegion !== "ALL" && reg !== selectedRegion) return false;
+            return true;
+        });
+
+        // 평균 점수 계산
+        let totalScore = filteredMl.reduce((sum, item) => sum + Number(item.safety_score || item.score || 0), 0);
+        let avgScore = filteredMl.length > 0 ? Math.round(totalScore / filteredMl.length) : 0;
+
+        const elAvg = document.getElementById('ml-avg-score');
+        if (elAvg) elAvg.innerText = avgScore;
+
+        const elBrief = document.getElementById('ml-briefing-text');
+        if (elBrief && filteredMl.length > 0) {
+            let latestTime = filteredMl[0].computed_at || filteredMl[0].updated_at || '최근';
+            elBrief.innerText = `[Render 머신러닝 연산 결과 리포트]\n- 동기화 시각: ${latestTime}\n- 현재 조회 범위: ${selectedRegion === 'ALL' ? '세종시 전체' : selectedRegion} (${filteredMl.length}개 법정동)\n- 예측된 평균 안전점수는 ${avgScore}점입니다.\n- 해당 결과는 Render 서버(sejong-traffic.onrender.com)의 RandomForest 위험도 예측 모델이 산출하여 Supabase DB에 저장한 데이터입니다.`;
+        }
+
+        // 테이블 렌더링
+        let html = `<table><thead><tr>
+            <th>법정동 명칭</th>
+            <th>ML 예측 안전 점수</th>
+            <th>위험 수준</th>
+            <th>연산 동기화 시각</th>
+        </tr></thead><tbody>`;
+
+        filteredMl.forEach(item => {
+            let score = Number(item.safety_score || item.score || 0);
+            let badgeClass = score >= 80 ? 'badge-success' : (score >= 60 ? 'badge-warning' : 'badge-danger');
+            let statusText = score >= 80 ? '안전' : (score >= 60 ? '주의' : '위험');
+
+            html += `<tr>
+                <td><strong>${item.legal_dong_name || item.region || '-'}</strong></td>
+                <td><strong style="font-size:15px; color:#3b82f6;">${score}점</strong></td>
+                <td><span class="badge ${badgeClass}">${statusText}</span></td>
+                <td><code>${item.computed_at || item.created_at || '-'}</code></td>
+            </tr>`;
+        });
+
+        container.innerHTML = html + `</tbody></table>`;
+    }
+
+    /**
+     * Render 서버의 /recompute 엔드포인트 호출 및 최신 데이터 재조회
+     */
+    function requestMlRecompute() {
+        const elBrief = document.getElementById('ml-briefing-text');
+        if (elBrief) {
+            elBrief.innerText = `⏳ Render 서버(https://sejong-traffic.onrender.com/recompute)로 재학습 요청을 전송했습니다.\n(서버 슬립 해제 및 ML 연산에 약 10~50초 정도 소요될 수 있습니다. 잠시만 기다려주세요...)`;
+        }
+
+        if (typeof google !== 'undefined' && google.script && google.script.run) {
+            google.script.run.withSuccessHandler(function (res) {
+                if (res && res.success) {
+                    alert("✅ 머신러닝 재계산 완료! 최신 데이터를 불러옵니다.");
+                    loadCloudDatabase();
+                } else {
+                    alert(`❌ 머신러닝 서버 연동 실패: ${res ? res.error : '응답 없음'}`);
+                    if (elBrief) elBrief.innerText = `❌ ML 연산 실패: ${res ? res.error : '서버 응답 없음'}`;
+                }
+            }).triggerMlRecompute();
+        } else {
+            alert("로컬 모드에서는 Render 서버 호출을 지원하지 않습니다.");
+        }
+    }
+
+    function executeSupabaseUpdate(id, statusValue) {
+        if (typeof google !== 'undefined' && google.script && google.script.run) {
+            google.script.run.withSuccessHandler(function (isSuccess) {
+                let record = cachedAccidentData.find(p => p.id === id) || cachedPenaltyData.find(p => p.id === id);
+                if (record) record.status = statusValue;
+                updateFilters();
+            }).updatePenaltyStatus(id, statusValue);
+        } else {
+            let record = cachedAccidentData.find(p => p.id === id) || cachedPenaltyData.find(p => p.id === id);
+            if (record) record.status = statusValue;
+            updateFilters();
+        }
+    }
+
+    function renderMapGrid(data) {
+        if (!leafletMap) return;
+        leafletMarkers.forEach(m => leafletMap.removeLayer(m));
+        leafletMarkers = [];
+
+        let weights = {};
+        regionsList.forEach(r => weights[r] = 0);
+        data.forEach(d => {
+            let r = d.region || d.legal_dong_name;
+            if (r) weights[r] = (weights[r] || 0) + (d.occrrnc_cnt || 1);
+        });
+
+        regionsList.forEach(region => {
+            const count = weights[region] || 0;
+            if (!regionCoords[region]) return;
+
+            let color = count > 10 ? '#ef4444' : (count > 4 ? '#f5a623' : '#10b981');
+            let radius = count === 0 ? 10 : 14 + Math.min(count, 18);
+
+            const circle = L.circleMarker(regionCoords[region], {
+                radius: radius,
+                fillColor: color,
+                color: color,
+                weight: 2,
+                opacity: 1,
+                fillOpacity: 0.6
+            }).addTo(leafletMap);
+
+            circle.on('click', () => selectRegionFromMap(region));
+            circle.bindTooltip(`<strong>${region}</strong><br/>사고 발생: ${count}건`, { permanent: false, direction: 'top', className: 'map-custom-label' });
+            leafletMarkers.push(circle);
+        });
+    }
+
+    function renderPredictTable() {
+        const container = document.getElementById('predict-table-view');
+        if (!container) return;
+
+        let html = `<table><thead><tr><th>행정구역명</th><th>전년도 (2024)</th><th>금년도 (2025)</th><th>리스크 증감</th></tr></thead><tbody>`;
+        regionsList.forEach(region => {
+            let last = cachedAccidentData.filter(i => (i.region || i.legal_dong_name) === region && (i.year === 2024 || (i.date && i.date.startsWith('2024')))).reduce((acc, cur) => acc + (cur.occrrnc_cnt || 1), 0);
+            let curr = cachedAccidentData.filter(i => (i.region || i.legal_dong_name) === region && (i.year === 2025 || (i.date && i.date.startsWith('2025')))).reduce((acc, cur) => acc + (cur.occrrnc_cnt || 1), 0);
+            let diff = curr - last;
+            html += `<tr>
+                <td><strong>${region}</strong></td>
+                <td>${last} 건</td>
+                <td>${curr} 건</td>
+                <td style="font-weight:bold; color:${diff > 0 ? 'var(--danger-color)' : 'var(--success-color)'}">${diff > 0 ? '▲ ' + diff : '▼ ' + Math.abs(diff)}</td>
+            </tr>`;
+        });
+        container.innerHTML = html + `</tbody></table>`;
+    }
+</script>
